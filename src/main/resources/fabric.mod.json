@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "donutauction",
+  "version": "1.0.0",
+  "name": "Donut Auction Helper",
+  "description": "Client-Helfer fuer eigene Auktionen: Timer, Zahlungs-Tracking, Hoechstbietender.",
+  "authors": ["du"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["donutauction.AuctionMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
