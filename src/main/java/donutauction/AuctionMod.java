@@ -86,7 +86,7 @@ public class AuctionMod implements ClientModInitializer {
     }
 
     private static void playBell(Minecraft mc, float pitch) {
-        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BELL, pitch, 1.0F));
+        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BELL.value(), pitch, 1.0F));
     }
 
     // --------------------------------------------------------------- commands
