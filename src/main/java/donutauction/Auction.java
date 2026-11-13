@@ -5,10 +5,10 @@ import net.minecraft.world.item.ItemStack;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Eine laufende Auktion: Item, Startgebot, Endzeit und die Summe der Zahlungen pro Spieler. */
+/** A running auction: item, starting bid, end time and the total paid per player. */
 public class Auction {
     public final String item;
-    public final ItemStack icon; // darf leer sein
+    public final ItemStack icon; // may be empty
     public final double startBid;
     public final long endTimeMs;
     public final Map<String, Double> totals = new LinkedHashMap<>();
@@ -32,7 +32,7 @@ public class Auction {
         return best;
     }
 
-    /** Gewinner nur, wenn das Startgebot erreicht wurde. */
+    /** The winner only counts if the starting bid was reached. */
     public Map.Entry<String, Double> validLeader() {
         Map.Entry<String, Double> l = leader();
         return (l != null && l.getValue() >= startBid) ? l : null;

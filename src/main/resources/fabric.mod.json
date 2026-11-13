@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "id": "donutauction",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Donut Auction Helper",
-  "description": "Client-Helfer fuer eigene Auktionen: Timer, Zahlungs-Tracking, Hoechstbietender.",
-  "authors": ["du"],
+  "description": "Client-side auction helper: item search menu, timer, payment tracking, highest bidder.",
+  "authors": ["you"],
   "license": "MIT",
   "environment": "client",
   "entrypoints": {

@@ -1,6 +1,6 @@
 package donutauction;
 
-import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.api.ClientModInitializer;
@@ -11,11 +11,14 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.Locale;
@@ -30,7 +33,12 @@ public class AuctionMod implements ClientModInitializer {
     private static boolean endAnnounced;
     private static boolean openMenu;
 
-    // Gruppe 1 = Spielername, Gruppe 2 = Betrag. Nur geraten, mit /auction pattern anpassen!
+    // End sound: note block "bell" (the gold block instrument) as a short rising chime.
+    private static int soundTick = -1;
+    private static final int[] SOUND_AT = {0, 3, 6, 10};
+    private static final float[] SOUND_PITCH = {1.0f, 1.26f, 1.5f, 2.0f};
+
+    // Group 1 = player name, group 2 = amount. This is only a guess, adjust with /auction pattern!
     private static Pattern payPattern =
             Pattern.compile("(\\w{3,16}) paid you \\$?([\\d.,]+\\s?[kKmMbB]?)");
 
@@ -47,15 +55,25 @@ public class AuctionMod implements ClientModInitializer {
                 openMenu = false;
                 client.setScreen(new AuctionScreen());
             }
+
             if (current != null && current.isOver() && !endAnnounced) {
                 endAnnounced = true;
+                soundTick = 0;
                 Map.Entry<String, Double> w = current.validLeader();
                 if (w == null) {
-                    say("Auktion beendet: " + current.item + " - kein gueltiges Gebot.");
+                    say("Auction ended: " + current.item + " - no valid bids.");
                 } else {
-                    say("Auktion beendet: " + current.item + " geht an " + w.getKey()
+                    say("Auction ended: " + current.item + " goes to " + w.getKey()
                             + " (" + fmt(w.getValue()) + ")");
                 }
+            }
+
+            if (soundTick >= 0) {
+                for (int i = 0; i < SOUND_AT.length; i++) {
+                    if (SOUND_AT[i] == soundTick) playBell(client, SOUND_PITCH[i]);
+                }
+                soundTick++;
+                if (soundTick > 12) soundTick = -1;
             }
         });
 
@@ -67,7 +85,11 @@ public class AuctionMod implements ClientModInitializer {
         registerCommands();
     }
 
-    // ---------------------------------------------------------------- Befehle
+    private static void playBell(Minecraft mc, float pitch) {
+        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BELL, pitch, 1.0F));
+    }
+
+    // --------------------------------------------------------------- commands
 
     private void registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
@@ -75,12 +97,13 @@ public class AuctionMod implements ClientModInitializer {
                         .executes(this::cmdMenu)
                         .then(ClientCommandManager.literal("menu").executes(this::cmdMenu))
                         .then(ClientCommandManager.literal("start")
-                                .then(ClientCommandManager.argument("minutes", DoubleArgumentType.doubleArg(0.1))
+                                .then(ClientCommandManager.argument("seconds", IntegerArgumentType.integer(5))
                                         .then(ClientCommandManager.argument("startbid", StringArgumentType.word())
                                                 .then(ClientCommandManager.argument("item", StringArgumentType.greedyString())
                                                         .executes(this::cmdStart)))))
                         .then(ClientCommandManager.literal("stop").executes(this::cmdStop))
                         .then(ClientCommandManager.literal("status").executes(this::cmdStatus))
+                        .then(ClientCommandManager.literal("sound").executes(this::cmdSound))
                         .then(ClientCommandManager.literal("pattern")
                                 .then(ClientCommandManager.argument("regex", StringArgumentType.greedyString())
                                         .executes(this::cmdPattern)))
@@ -90,44 +113,50 @@ public class AuctionMod implements ClientModInitializer {
                                                 .executes(this::cmdFakeBid))))));
     }
 
-    private int cmdStart(CommandContext<FabricClientCommandSource> ctx) {
-        double minutes = DoubleArgumentType.getDouble(ctx, "minutes");
-        String startRaw = StringArgumentType.getString(ctx, "startbid");
-        String item = StringArgumentType.getString(ctx, "item");
-        Double start = parseMoney(startRaw);
-        if (start == null) {
-            feedback(ctx, "Ungueltiges Startgebot: " + startRaw + " (Beispiele: 5000, 10k, 2.5m)");
-            return 0;
-        }
-        startAuction(item, ItemStack.EMPTY, start, minutes);
-        return 1;
-    }
-
     private int cmdMenu(CommandContext<FabricClientCommandSource> ctx) {
-        // Das Chatfenster schliesst sich nach dem Befehl, daher oeffnen wir das Menue im naechsten Tick.
+        // The chat screen closes after a command, so the menu opens on the next tick.
         openMenu = true;
         return 1;
     }
 
-    /** Wird vom Befehl und vom Menue benutzt. */
-    public static void startAuction(String item, ItemStack icon, double start, double minutes) {
-        current = new Auction(item, icon, start, (long) (minutes * 60_000));
+    private int cmdStart(CommandContext<FabricClientCommandSource> ctx) {
+        int seconds = IntegerArgumentType.getInteger(ctx, "seconds");
+        String startRaw = StringArgumentType.getString(ctx, "startbid");
+        String item = StringArgumentType.getString(ctx, "item");
+        Double start = parseMoney(startRaw);
+        if (start == null) {
+            feedback(ctx, "Invalid starting bid: " + startRaw + " (examples: 5000, 10k, 2.5m)");
+            return 0;
+        }
+        startAuction(item, ItemStack.EMPTY, start, seconds);
+        return 1;
+    }
+
+    /** Used by the command and by the menu. */
+    public static void startAuction(String item, ItemStack icon, double start, int seconds) {
+        current = new Auction(item, icon, start, seconds * 1000L);
         endAnnounced = false;
-        say("Gestartet: " + item + " | Start " + fmt(start) + " | " + minutes + " Min.");
+        soundTick = -1;
+        say("Started: " + item + " | start " + fmt(start) + " | " + fmtTime(seconds * 1000L));
     }
 
     private int cmdStop(CommandContext<FabricClientCommandSource> ctx) {
         current = null;
-        feedback(ctx, "Auktion entfernt.");
+        feedback(ctx, "Auction removed.");
+        return 1;
+    }
+
+    private int cmdSound(CommandContext<FabricClientCommandSource> ctx) {
+        soundTick = 0;
         return 1;
     }
 
     private int cmdStatus(CommandContext<FabricClientCommandSource> ctx) {
         if (current == null) {
-            feedback(ctx, "Keine Auktion aktiv.");
+            feedback(ctx, "No active auction.");
             return 0;
         }
-        feedback(ctx, current.item + " | Zeit: " + fmtTime(current.remainingMs()));
+        feedback(ctx, current.item + " | time left: " + fmtTime(current.remainingMs()));
         for (Map.Entry<String, Double> e : current.totals.entrySet()) {
             feedback(ctx, " - " + e.getKey() + ": " + fmt(e.getValue()));
         }
@@ -138,30 +167,30 @@ public class AuctionMod implements ClientModInitializer {
         String regex = StringArgumentType.getString(ctx, "regex");
         try {
             payPattern = Pattern.compile(regex);
-            feedback(ctx, "Neues Muster gesetzt. (Gruppe 1 = Name, Gruppe 2 = Betrag)");
+            feedback(ctx, "New pattern set. (group 1 = name, group 2 = amount)");
             return 1;
         } catch (PatternSyntaxException e) {
-            feedback(ctx, "Ungueltiges Regex: " + e.getDescription());
+            feedback(ctx, "Invalid regex: " + e.getDescription());
             return 0;
         }
     }
 
     private int cmdFakeBid(CommandContext<FabricClientCommandSource> ctx) {
         if (current == null) {
-            feedback(ctx, "Keine Auktion aktiv.");
+            feedback(ctx, "No active auction.");
             return 0;
         }
         String name = StringArgumentType.getString(ctx, "name");
         Double amount = parseMoney(StringArgumentType.getString(ctx, "amount"));
         if (amount == null) {
-            feedback(ctx, "Ungueltiger Betrag.");
+            feedback(ctx, "Invalid amount.");
             return 0;
         }
         registerPayment(name, amount);
         return 1;
     }
 
-    // ---------------------------------------------------------------- Chat
+    // ------------------------------------------------------------------- chat
 
     private static void handleChat(String raw) {
         if (current == null || current.isOver()) return;
@@ -174,47 +203,72 @@ public class AuctionMod implements ClientModInitializer {
 
     private static void registerPayment(String player, double amount) {
         current.addPayment(player, amount);
-        say("+" + fmt(amount) + " von " + player + " (gesamt " + fmt(current.totals.get(player)) + ")");
+        say("+" + fmt(amount) + " from " + player + " (total " + fmt(current.totals.get(player)) + ")");
     }
 
-    // ---------------------------------------------------------------- Overlay
+    // ---------------------------------------------------------------- overlay
 
     private static void renderOverlay(GuiGraphics g) {
         Minecraft mc = Minecraft.getInstance();
         if (current == null || mc.options.hideGui) return;
         Font font = mc.font;
-        int x = 6, y = 6;
+
+        boolean over = current.isOver();
+        long rem = current.remainingMs();
+
+        String l1 = "AUCTION: " + current.item;
+        String l2 = over ? "ENDED" : "Time left: " + fmtTime(rem);
+        Map.Entry<String, Double> lead = current.leader();
+        String l3;
+        if (over) {
+            Map.Entry<String, Double> w = current.validLeader();
+            l3 = w == null ? "No valid bids" : "Winner: " + w.getKey() + " - " + fmt(w.getValue());
+        } else {
+            l3 = lead == null
+                    ? "No bids yet (start " + fmt(current.startBid) + ")"
+                    : "Leading: " + lead.getKey() + " - " + fmt(lead.getValue());
+        }
+
+        int iconW = current.icon.isEmpty() ? 0 : 22;
+        int textW = Math.max(font.width(l1), Math.max(font.width(l2), font.width(l3)));
+        int x = 8;
+        int y = 8;
+        int w = iconW + textW + 14;
+        int h = 3 * 11 + 8;
+
+        // green panel
+        g.fill(x, y, x + w, y + h, 0xB00B2A12);
+        g.fill(x, y, x + 2, y + h, 0xFF2ECC40);
 
         if (!current.icon.isEmpty()) {
-            g.renderItem(current.icon, x, y - 3);
-            x += 20;
+            g.renderItem(current.icon, x + 6, y + (h - 16) / 2);
         }
-        g.drawString(font, "Auktion: " + current.item, x, y, 0xFFFFFF55);
-        y += 11;
 
-        String time = current.isOver() ? "BEENDET" : "Zeit: " + fmtTime(current.remainingMs());
-        g.drawString(font, time, x, y, current.isOver() ? 0xFFFF5555 : 0xFFFFFFFF);
-        y += 11;
-
-        Map.Entry<String, Double> l = current.leader();
-        String top = (l == null)
-                ? "Noch keine Gebote (Start " + fmt(current.startBid) + ")"
-                : "Vorne: " + l.getKey() + " - " + fmt(l.getValue());
-        g.drawString(font, top, x, y, 0xFF55FF55);
+        int tx = x + 8 + iconW;
+        int ty = y + 5;
+        int timeColor = over ? 0xFFFFAA00 : (rem < 10_000 ? 0xFFFFFF55 : 0xFFFFFFFF);
+        g.drawString(font, l1, tx, ty, 0xFF55FF55);
+        g.drawString(font, l2, tx, ty + 11, timeColor);
+        g.drawString(font, l3, tx, ty + 22, 0xFF9CFF9C);
     }
 
-    // ---------------------------------------------------------------- Helfer
+    // ---------------------------------------------------------------- helpers
 
     private static void say(String s) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null) mc.player.displayClientMessage(Component.literal("[Auktion] " + s), false);
+        if (mc.player == null) return;
+        Component msg = Component.literal("[Auction] ").withStyle(ChatFormatting.GREEN)
+                .append(Component.literal(s).withStyle(ChatFormatting.WHITE));
+        mc.player.displayClientMessage(msg, false);
     }
 
     private static void feedback(CommandContext<FabricClientCommandSource> ctx, String s) {
-        ctx.getSource().sendFeedback(Component.literal("[Auktion] " + s));
+        Component msg = Component.literal("[Auction] ").withStyle(ChatFormatting.GREEN)
+                .append(Component.literal(s).withStyle(ChatFormatting.WHITE));
+        ctx.getSource().sendFeedback(msg);
     }
 
-    /** Versteht 5000, 5,000, 10k, 2.5m, 1b. */
+    /** Understands 5000, 5,000, 10k, 2.5m, 1b. */
     static Double parseMoney(String raw) {
         try {
             String s = raw.trim().replace(",", "").toLowerCase(Locale.ROOT);
@@ -236,7 +290,7 @@ public class AuctionMod implements ClientModInitializer {
     }
 
     static String fmtTime(long ms) {
-        long s = ms / 1000;
+        long s = (ms + 999) / 1000;
         return String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60);
     }
 }
