@@ -3,17 +3,15 @@ package donutauction;
 import java.util.*;
 import java.util.regex.*;
 
-/** Speichert alle eingehenden Payments und erkennt sie aus Chat-Nachrichten. */
+/** Auction-Runde (Item, Anzahl, Timer) + eingehende Payments. */
 public class Auction {
+    public enum State { IDLE, RUNNING, ENDED }
+
     private static final String AMT = "\\$?(?<a>\\d[\\d,]*(?:\\.\\d+)?)\\s*(?<s>[kKmMbB]?)(?![A-Za-z])";
 
-    // Mehrere Nachrichtenformate, damit Payments zuverlässig erkannt werden
     private static final List<Pattern> PATTERNS = List.of(
-        // "Name paid you $1.5K"  /  "Name has sent you $500"
         Pattern.compile("(?<p>\\w{3,16}) (?:has )?(?:paid|payed|sent|pays|gave) you " + AMT, Pattern.CASE_INSENSITIVE),
-        // "You received $1.5K from Name"
         Pattern.compile("received " + AMT + " from (?<p>\\w{3,16})", Pattern.CASE_INSENSITIVE),
-        // "$1.5K from Name"
         Pattern.compile("\\$(?<a>\\d[\\d,]*(?:\\.\\d+)?)\\s*(?<s>[kKmMbB]?)(?![A-Za-z]) from (?<p>\\w{3,16})")
     );
 
@@ -25,12 +23,52 @@ public class Auction {
     private static String lastRaw = "";
     private static long lastTime = 0;
 
+    private static State state = State.IDLE;
+    private static String itemName = "";
+    private static int itemCount = 1;
+    private static int durationSec = 60;
+    private static long endTime = 0;
+
+    // ---- Runde ----
+    public static synchronized void start(String item, int count, int seconds) {
+        totals.clear();
+        log.clear();
+        debug.clear();
+        itemName = item;
+        itemCount = Math.max(1, count);
+        durationSec = Math.max(1, seconds);
+        endTime = System.currentTimeMillis() + durationSec * 1000L;
+        state = State.RUNNING;
+    }
+
+    public static synchronized long remainingMs() {
+        return state == State.RUNNING ? Math.max(0, endTime - System.currentTimeMillis()) : 0;
+    }
+
+    /** Pro Tick aufrufen. Gibt eine Nachricht zurück, sobald der Timer abgelaufen ist. */
+    public static synchronized String tick() {
+        if (state == State.RUNNING && System.currentTimeMillis() >= endTime) {
+            state = State.ENDED;
+            var r = ranking();
+            String what = itemCount + "x " + itemName;
+            if (r.isEmpty()) return "[Auction] " + what + ": Kein Gebot.";
+            return "[Auction] " + what + " geht an " + r.get(0).getKey() + " für " + format(r.get(0).getValue()) + "!";
+        }
+        return null;
+    }
+
+    public static synchronized State state() { return state; }
+    public static synchronized String itemName() { return itemName; }
+    public static synchronized int itemCount() { return itemCount; }
+    public static synchronized int durationSec() { return durationSec; }
+
+    // ---- Payments ----
     public static synchronized boolean handleMessage(String raw) {
         long now = System.currentTimeMillis();
-        // Doppelte Events (GAME + CHAT) nicht doppelt zählen
         if (raw.equals(lastRaw) && now - lastTime < 500) return false;
         lastRaw = raw;
         lastTime = now;
+        if (state == State.ENDED) return false; // nach Ablauf zählt nichts mehr
 
         for (Pattern p : PATTERNS) {
             Matcher m = p.matcher(raw);
@@ -52,7 +90,6 @@ public class Auction {
             log.add(new Entry(player, amount, now));
             return true;
         }
-        // Für /auction debug: Nachrichten merken, die nach Geld aussehen, aber nicht erkannt wurden
         String low = raw.toLowerCase();
         if (raw.contains("$") || low.contains("paid") || low.contains("pay")) {
             debug.addFirst(raw);
@@ -85,6 +122,7 @@ public class Auction {
         totals.clear();
         log.clear();
         debug.clear();
+        state = State.IDLE;
     }
 
     public static String format(double v) {

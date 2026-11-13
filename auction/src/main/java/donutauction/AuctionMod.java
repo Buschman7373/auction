@@ -29,6 +29,8 @@ public class AuctionMod implements ClientModInitializer {
             Auction.handleMessage(message.getString()));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            String done = Auction.tick();
+            if (done != null && client.player != null) client.player.sendMessage(Text.literal(done), false);
             while (openKey.wasPressed()) {
                 if (client.currentScreen == null) client.setScreen(new AuctionScreen());
             }
